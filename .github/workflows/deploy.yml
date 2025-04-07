@@ -1,0 +1,81 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22.12
+      - run: npm install
+      - name: Run linter
+        run: npm run lint
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22.12
+      - run: npm install
+      - name: Check security vulnerabilities
+        run: npm audit --audit-level=high
+
+  dependency-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22.12
+      - name: Install dependencies
+        run: npm install
+      - name: Check for outdated dependencies
+        run: npm outdated || true
+      - name: Check for vulnerabilities
+        run: npm audit || true
+      - name: Create dependency report
+        run: |
+          echo "## Dependency Check Report" > dependency_report.md
+          echo "### Outdated Dependencies" >> dependency_report.md
+          npm outdated --json | jq -r 'to_entries | .[] | "- **\(.key)**: \(.value.current) -> \(.value.latest)"' >> dependency_report.md || echo "- No outdated dependencies" >> dependency_report.md
+          echo "### Security Vulnerabilities" >> dependency_report.md
+          npm audit --json | jq -r '.vulnerabilities | to_entries | .[] | "- **\(.key)**: \(.value.severity) severity"' >> dependency_report.md || echo "- No vulnerabilities found" >> dependency_report.md
+      - name: Create issue with dependency report
+        uses: peter-evans/create-issue-from-file@v4
+        with:
+          title: Weekly Dependency Check Report
+          content-filepath: ./dependency_report.md
+          token: ${{ secrets.GITHUB_TOKEN }}
+          labels: dependencies, maintenance
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, security]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22.12
+      - run: npm ci
+      - name: Type checking
+        run: npx tsc --noEmit
+      - name: Build Next.js
+        run: npm run build
